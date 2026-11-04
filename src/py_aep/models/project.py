@@ -154,6 +154,7 @@ from .validators import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from typing import ClassVar, Iterator
 
     from ..binary.layer_chunks import LdtaChunk
@@ -165,6 +166,7 @@ if TYPE_CHECKING:
     from .layers.av_layer import AVLayer
     from .layers.layer import Layer
     from .properties.mask_property_group import MaskPropertyGroup
+    from .relink import RelinkResult
     from .text.font_object import FontObject
     from .text.text_document import TextDocument
 
@@ -2112,6 +2114,68 @@ class Project:
                 dup.remove()
                 removed += 1
         return removed
+
+    def relink_footage(
+        self,
+        search_roots: str | os.PathLike[str] | Sequence[str | os.PathLike[str]],
+        *,
+        dry_run: bool = False,
+        include_proxies: bool = True,
+    ) -> RelinkResult:
+        """Batch-relink footage whose stored source path no longer exists.
+
+        After a project moves machines or its media folders are
+        reorganised, many footage paths break at once. This method searches
+        one or more folders for each missing file and relinks every source
+        with a unique candidate - the safer batch equivalent of calling
+        [FootageItem.replace][] on each item.
+
+        Candidates are matched by the tail of the stored path, compared
+        case-insensitively on every path part: a stored path ending
+        ``media/a.png`` matches ``<root>/media/a.png`` (suffix length 2)
+        over a bare ``<root>/other/a.png`` (file name only). The longest
+        suffix wins. If several files tie for the best match, the source
+        is recorded as `ambiguous` and skipped; nothing is guessed. A
+        unique candidate whose extension is not an importable footage
+        format is recorded as `unsupported_format` and skipped as well.
+
+        The whole batch is pre-flighted before anything is written: only
+        sources with exactly one importable candidate can be modified.
+        Main footage sources and file proxies are both considered by
+        default (`include_proxies=False` limits the run to main sources).
+        A replacement keeps the existing Interpret Footage settings, a
+        user-assigned item name, single-layer bindings of layered files,
+        and the proxy assignment (including its enabled/disabled state).
+
+        Args:
+            search_roots: A directory, or a list of directories, searched
+                recursively for candidates. Roots must exist.
+            dry_run: When `True`, report the planned replacements without
+                modifying the project.
+            include_proxies: When `True` (the default), missing file
+                proxies of footage and compositions are relinked alongside
+                main sources.
+
+        Returns:
+            A [RelinkResult][] holding the `completed` entries (replaced,
+            or merely planned in a dry run), the `skipped` entries
+            (`not_found`, `ambiguous`, `unsupported_format`) and, in
+            execute mode, the `failed` entries for sources whose
+            replacement raised an unexpected error after writing started
+            (the error text is attached; earlier and later confirmed
+            replacements are unaffected).
+
+        Raises:
+            ValueError: If a search root is not an existing directory.
+        """
+        from .relink import relink_footage as _relink_footage
+
+        return _relink_footage(
+            self,
+            search_roots,
+            dry_run=dry_run,
+            include_proxies=include_proxies,
+        )
 
     def save(self, path: os.PathLike[str]) -> None:
         """

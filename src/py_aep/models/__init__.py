@@ -34,6 +34,16 @@ from .properties.property import Property
 from .properties.property_base import PropertyBase
 from .properties.property_group import PropertyGroup
 from .properties.shape import FeatherPoint, Shape
+from .relink import (
+    RELINK_AMBIGUOUS,
+    RELINK_FAILED,
+    RELINK_NOT_FOUND,
+    RELINK_PLANNED,
+    RELINK_REPLACED,
+    RELINK_UNSUPPORTED_FORMAT,
+    RelinkItem,
+    RelinkResult,
+)
 from .renderqueue.format_options import (
     CineonFormatOptions,
     JpegFormatOptions,
@@ -96,6 +106,14 @@ __all__ = [
     "PropertyBase",
     "PropertyGroup",
     "RayTracedRendererOptions",
+    "RELINK_AMBIGUOUS",
+    "RELINK_FAILED",
+    "RELINK_NOT_FOUND",
+    "RELINK_PLANNED",
+    "RELINK_REPLACED",
+    "RELINK_UNSUPPORTED_FORMAT",
+    "RelinkItem",
+    "RelinkResult",
     "RendererOptionsBase",
     "RenderQueue",
     "RenderQueueItem",
