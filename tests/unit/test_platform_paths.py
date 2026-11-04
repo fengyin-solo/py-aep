@@ -7,7 +7,12 @@ import json
 import pytest
 
 from py_aep.binary.utils import PENDING_ASCENDCOUNT, alas_platform, build_als2_list
-from py_aep.resolvers.platform_paths import platform_path, relative_path_counts
+from py_aep.resolvers.platform_paths import (
+    path_flavor,
+    platform_path,
+    relative_path_counts,
+    relative_source_path,
+)
 
 SHOT = r"\\serge\as_serie\fabrication\episodes\e203\final_compo\s030"
 
@@ -145,3 +150,105 @@ def test_alas_platform_follows_path_style(path: str, code: int) -> None:
     data = json.loads(alas.value)  # type: ignore[attr-defined]
     assert data["platform"] == code
     assert data["ascendcount_base"] == data["ascendcount_target"] == PENDING_ASCENDCOUNT
+
+
+@pytest.mark.parametrize(
+    ("path", "flavor"),
+    [
+        ("/Users/a/b.png", "macos"),
+        ("C:/Users/a/b.png", "windows"),
+        (r"C:\Users\a\b.png", "windows"),
+        (r"\\server\share\b.png", "windows"),
+        ("relative/b.png", None),
+        ("", None),
+    ],
+)
+def test_path_flavor(path: str, flavor: str | None) -> None:
+    assert path_flavor(path) == flavor
+
+
+@pytest.mark.parametrize(
+    ("fullpath", "base", "target", "is_folder", "expected"),
+    [
+        # proxy.aep: samples/models/item -> ../../assets/file
+        (
+            r"C:\Users\a\git\py-aep\samples\assets\mov.mov",
+            3,
+            2,
+            False,
+            "../../assets/mov.mov",
+        ),
+        # An image-sequence folder keeps the folder, not the synthetic "_".
+        (
+            r"C:\Users\a\git\py-aep\samples\assets\seq",
+            3,
+            3,
+            True,
+            "../../assets/seq",
+        ),
+        # Target in the project file's own folder: no ascent.
+        (r"C:\proj\p.aep", 1, 1, False, "p.aep"),
+        # POSIX-style record reconstructed the same way.
+        ("/Users/a/proj/assets/x.png", 2, 3, False, "../proj/assets/x.png"),
+        # No relative path defined (different volumes / pending counts).
+        (r"C:\x\a.png", 0, 0, False, ""),
+        ("/x/a.png", -1, -1, False, ""),
+        # Relative or unparseable stored paths never raise.
+        ("media/a.png", 1, 2, False, ""),
+        ("", 2, 2, False, ""),
+    ],
+)
+def test_relative_source_path(
+    fullpath: str, base: int, target: int, is_folder: bool, expected: str
+) -> None:
+    assert (
+        relative_source_path(
+            fullpath,
+            ascendcount_base=base,
+            ascendcount_target=target,
+            target_is_folder=is_folder,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("project", "target", "is_folder"),
+    [
+        (r"C:\repo\samples\models\import\x.aep", r"C:\repo\samples\assets\aif.aif", False),
+        (r"C:\repo\samples\models\import\x.aep", r"C:\repo\samples\assets", True),
+        (
+            "/Volumes/O/overlay/samples/models/import/media_gap_formats.aep",
+            "/Volumes/O/overlay/samples/assets/aif.aif",
+            False,
+        ),
+        (r"C:\Repo\a.aep", r"c:\repo\b.png", False),
+    ],
+)
+def test_relative_source_path_round_trips_with_counts(
+    project: str, target: str, is_folder: bool
+) -> None:
+    """The reconstructed relative location, resolved from the project
+    folder, lands on the target - the inverse of relative_path_counts."""
+    import posixpath
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    base, target_count = relative_path_counts(
+        project, target, target_is_folder=is_folder
+    )
+    relative = relative_source_path(
+        target,
+        ascendcount_base=base,
+        ascendcount_target=target_count,
+        target_is_folder=is_folder,
+    )
+    pure = PureWindowsPath if project[0] != "/" else PurePosixPath
+    project_folder = str(pure(project).parent).replace("\\", "/")
+    # The relative parts are POSIX-style; collapse '..' lexically and
+    # compare as POSIX paths (a Windows drive becomes a leading component).
+    rebuilt = posixpath.normpath(posixpath.join(project_folder, relative))
+    expected = posixpath.normpath(str(pure(target)).replace("\\", "/"))
+    if pure is PureWindowsPath:
+        # Windows path components compare case-insensitively.
+        rebuilt, expected = rebuilt.lower(), expected.lower()
+    assert rebuilt == expected

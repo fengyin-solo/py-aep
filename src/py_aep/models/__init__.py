@@ -1,6 +1,15 @@
 """Data models for After Effects project structure."""
 
 from .application import Application
+from .audit import (
+    CompositionAuditRecord,
+    DependencyAuditReport,
+    DuplicateSourceRecord,
+    FolderAuditRecord,
+    FootageAuditRecord,
+    MissingPathRecord,
+    SourceAudit,
+)
 from .essential_graphics import EssentialGraphicsController
 from .guide import Guide
 from .import_options import CURRENT_VALUE, ImportOptions
@@ -67,11 +76,16 @@ __all__ = [
     "CineonFormatOptions",
     "ClassicRendererOptions",
     "CompItem",
+    "CompositionAuditRecord",
+    "DependencyAuditReport",
+    "DuplicateSourceRecord",
     "EssentialGraphicsController",
     "FeatherPoint",
     "FileSource",
+    "FolderAuditRecord",
     "FolderItem",
     "FontObject",
+    "FootageAuditRecord",
     "FootageItem",
     "FootageSource",
     "Guide",
@@ -85,6 +99,7 @@ __all__ = [
     "LightLayer",
     "MarkerValue",
     "MaskPropertyGroup",
+    "MissingPathRecord",
     "OpenExrFormatOptions",
     "OutputModule",
     "ParametricMeshLayer",
@@ -103,6 +118,7 @@ __all__ = [
     "Shape",
     "ShapeLayer",
     "SolidSource",
+    "SourceAudit",
     "TargaFormatOptions",
     "TextDocument",
     "TextLayer",

@@ -161,6 +161,7 @@ if TYPE_CHECKING:
     from ..parsers.templates import OutputModuleTemplate
     from ..resolvers.media_probe import MediaInfo
     from ..resolvers.psd_styles import PsdLayerStyles
+    from .audit import DependencyAuditReport
     from .items.av_item import AVItem
     from .layers.av_layer import AVLayer
     from .layers.layer import Layer
@@ -2112,6 +2113,54 @@ class Project:
                 dup.remove()
                 removed += 1
         return removed
+
+    def audit_dependencies(
+        self,
+        workdir: str | os.PathLike[str] | None = None,
+    ) -> DependencyAuditReport:
+        """Audit the project's footage and composition dependencies.
+
+        Read-only pre-delivery check: walks the project tree without parsing
+        layer bodies, reading footage content, or modifying any project
+        object, and returns a [DependencyAuditReport][] of stably-sorted
+        footage, composition and folder records. For every footage item the
+        report separates the main source from its proxy and states whether
+        each backing file exists, plus:
+
+        - [missing_paths][DependencyAuditReport.missing_paths]: stored
+          main/proxy paths neither the absolute record nor the
+          project-relative fallback could locate on disk,
+        - [duplicate_sources][DependencyAuditReport.duplicate_sources]:
+          source files referenced as the main source by more than one
+          [FootageItem][],
+        - [unused_footage][DependencyAuditReport.unused_footage] /
+          [unused_compositions][DependencyAuditReport.unused_compositions]:
+          items no composition uses,
+        - [cycles][DependencyAuditReport.cycles]: cycles in the nested
+          composition graph.
+
+        Files are located the way After Effects locates them: the stored
+        absolute path (when written in the auditing machine's path style)
+        first, then the relative fallback encoded by the `alas` record's
+        `ascendcount_*` counts. Relative paths are interpreted in the
+        project's original platform style from `workdir` when given, or
+        otherwise from the parsed project file's folder; a project built
+        with `py_aep.new()` and no `workdir` only checks absolute paths. A
+        missing or unparseable path is reported, never raised.
+
+        Args:
+            workdir: Directory the project-relative fallback paths are
+                interpreted from, replacing the parsed project file's
+                folder. Pass the folder the project would live in when
+                auditing a copy on another machine.
+
+        Returns:
+            The immutable [DependencyAuditReport][]; running the audit
+            repeatedly on an unchanged project returns equal reports.
+        """
+        from .audit import audit_dependencies
+
+        return audit_dependencies(self, workdir)
 
     def save(self, path: os.PathLike[str]) -> None:
         """

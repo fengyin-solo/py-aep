@@ -57,12 +57,73 @@ def platform_path(path: str, *, windows: bool) -> str:
     return f"{root}/{rest}" if rest or not root else root
 
 
+def path_flavor(path: str) -> str | None:
+    """The platform style an absolute path is written in: `"windows"` for a
+    drive-letter or UNC path, `"macos"` for a POSIX path, or `None` for a
+    relative or unparseable path.
+
+    The flavor follows the path itself, not the saving machine (the same rule
+    the `alas` record's `platform` code uses), so a project may in principle
+    mix the two styles.
+    """
+    if _is_posix(path):
+        return "macos"
+    if _DRIVE.match(path) or _UNC.match(path):
+        return "windows"
+    return None
+
+
 def _pure_path(path: str) -> PurePath | None:
     if _is_posix(path):
         return PurePosixPath(path)
     if _DRIVE.match(path) or _UNC.match(path):
         return PureWindowsPath(path)
     return None
+
+
+def relative_source_path(
+    fullpath: str,
+    *,
+    ascendcount_base: int,
+    ascendcount_target: int,
+    target_is_folder: bool,
+) -> str:
+    """Rebuild the project-relative fallback location After Effects stores
+    via its `ascendcount_*` pair.
+
+    From the project file's folder, After Effects walks up
+    `ascendcount_base - 1` components (the count includes the project file
+    itself) and then down the last `ascendcount_target` components of
+    `fullpath` (a folder target carries one extra component, the folder
+    itself, so it is discounted). The result uses POSIX separators, which
+    `pathlib.Path` joins on either platform.
+
+    Returns an empty string when the counts do not define a relative path
+    (`(0, 0)`: different volumes or path styles) or `fullpath` is not an
+    absolute path in a known style - never raises.
+
+    Args:
+        fullpath: The record's absolute `fullpath`, in its own platform
+            style.
+        ascendcount_base: Components from the common folder down to the
+            project file.
+        ascendcount_target: Components from the common folder down to the
+            target.
+        target_is_folder: The record's `target_is_folder`.
+    """
+    pure = _pure_path(fullpath)
+    if pure is None or ascendcount_base <= 0 or ascendcount_target <= 0:
+        return ""
+    ups = ascendcount_base - 1
+    down = ascendcount_target - (1 if target_is_folder else 0)
+    if down < 0:
+        return ""
+    # parts[0] is the anchor ('/' or 'C:\\'); the tail must not include it.
+    components = pure.parts
+    if down > len(components) - 1:
+        return ""
+    tail = components[len(components) - down :] if down else ()
+    return "/".join(("..",) * ups + tuple(tail))
 
 
 def _volume_parts(path: PurePath) -> int:
