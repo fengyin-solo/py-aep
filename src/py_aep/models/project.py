@@ -154,6 +154,7 @@ from .validators import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from typing import ClassVar, Iterator
 
     from ..binary.layer_chunks import LdtaChunk
@@ -165,6 +166,7 @@ if TYPE_CHECKING:
     from .layers.av_layer import AVLayer
     from .layers.layer import Layer
     from .properties.mask_property_group import MaskPropertyGroup
+    from .renderqueue.render_queue_item import RenderQueueItem
     from .text.font_object import FontObject
     from .text.text_document import TextDocument
 
@@ -1122,6 +1124,195 @@ class Project:
     def footages(self) -> list[FootageItem]:
         """All the footages in the project."""
         return [item for item in self.items.values() if isinstance(item, FootageItem)]
+
+    @staticmethod
+    def _normalize_output_target(value: str) -> str:
+        """Canonical key for an output path so two spellings of the same
+        target compare equal: both separator styles are accepted on either
+        platform, the path is made absolute, and the host's path casing is
+        applied (case-insensitive on Windows, as-is on macOS/Linux)."""
+        unified = value.replace("\\", os.sep).replace("/", os.sep)
+        return os.path.normcase(os.path.abspath(unified))
+
+    def enqueue_compositions(
+        self,
+        compositions: Iterable[CompItem],
+        output_files: Iterable[str | os.PathLike[str]],
+        *,
+        render_template: str | None = None,
+        output_template: str | None = None,
+        overwrite: bool | None = None,
+    ) -> list[RenderQueueItem]:
+        """Add several compositions to the render queue in one transaction.
+
+        Creates one render queue item per composition, each with a single
+        default output module pointing at the corresponding output file
+        (py_aep extension; ExtendScript only offers the per-item
+        [RenderQueue.add][py_aep.models.renderqueue.render_queue.RenderQueue.add]).
+
+        Every input is validated *before* the queue (or any composition) is
+        touched: if a single precheck fails, nothing is added - there is no
+        half-filled queue to clean up. On success the new queue items are
+        appended in input order, after the items already queued.
+
+        Args:
+            compositions: The [CompItem][]s to enqueue, in queue order.
+            output_files: One output path per composition, in the same
+                order. Strings and path-like objects are accepted; the
+                paths are stored in the project platform's style.
+            render_template: Optional render settings template name (as
+                listed by `RenderQueueItem.templates`). When omitted, the
+                new item keeps the default render settings
+                [RenderQueue.add][py_aep.models.renderqueue.render_queue.RenderQueue.add]
+                gives it.
+            output_template: Optional output module template name (as
+                listed by `OutputModule.templates`). When omitted, the
+                default output module keeps its default settings.
+            overwrite: Policy for output targets that already exist on
+                disk and must be given explicitly when a conflict exists:
+                `True` enqueues anyway (a later render overwrites),
+                `False` rejects the batch, and `None` (the default)
+                rejects the batch and asks the caller to choose.
+
+        Returns:
+            The newly created [RenderQueueItem][]s, in the same order as
+            `compositions`. An empty batch returns an empty list without
+            touching the queue.
+
+        Raises:
+            TypeError: If an entry of `compositions` is not a
+                [CompItem][], an entry of `output_files` is not a path, or
+                `overwrite` is not a bool.
+            ValueError: If the path count does not match the composition
+                count, a composition is duplicated or does not belong to
+                this project, two paths resolve to the same target, a
+                named template does not exist (or no
+                `ae_preferences_dir` was supplied to `parse()`), or an
+                output target exists with `overwrite` left unset.
+            FileExistsError: If an output target exists and `overwrite`
+                is `False`.
+        """
+        comps = list(compositions)
+        files = list(output_files)
+
+        # -- Precheck phase: raise before anything in the model changes. --
+
+        for index, comp in enumerate(comps):
+            if not isinstance(comp, CompItem):
+                raise TypeError(
+                    f"compositions[{index}] must be a CompItem, got "
+                    f"{type(comp).__name__}"
+                )
+        for index, path_value in enumerate(files):
+            if not isinstance(path_value, (str, os.PathLike)):
+                raise TypeError(
+                    f"output_files[{index}] must be a string or os.PathLike, "
+                    f"got {type(path_value).__name__}"
+                )
+        if overwrite is not None:
+            validate_bool(overwrite)
+        if render_template is not None:
+            validate_string(render_template)
+        if output_template is not None:
+            validate_string(output_template)
+
+        if len(files) != len(comps):
+            raise ValueError(
+                f"expected one output path per composition: "
+                f"{len(comps)} composition(s) but {len(files)} output path(s)"
+            )
+
+        seen_comps: list[CompItem] = []
+        for index, comp in enumerate(comps):
+            if self.items.get(comp.id) is not comp:
+                raise ValueError(
+                    f"compositions[{index}] ({comp.name!r}) is not an item of "
+                    "this project"
+                )
+            if any(comp is other for other in seen_comps):
+                raise ValueError(
+                    f"compositions[{index}] ({comp.name!r}) is listed more "
+                    "than once; each composition can only be enqueued once "
+                    "per batch"
+                )
+            seen_comps.append(comp)
+
+        seen_targets: dict[str, int] = {}
+        for index, path_value in enumerate(files):
+            target = self._normalize_output_target(os.fspath(path_value))
+            previous = seen_targets.get(target)
+            if previous is not None:
+                raise ValueError(
+                    f"output_files[{index}] resolves to the same target as "
+                    f"output_files[{previous}]: {os.fspath(path_value)!r}"
+                )
+            seen_targets[target] = index
+
+        existing = [
+            os.fspath(path_value)
+            for path_value in files
+            if Path(os.fspath(path_value)).exists()
+        ]
+        if existing:
+            if overwrite is None:
+                extra = len(existing) - 1
+                detail = (
+                    f"{existing[0]!r} and {extra} more" if extra else f"{existing[0]!r}"
+                )
+                raise ValueError(
+                    f"one or more output targets already exist ({detail}); "
+                    "the conflict policy must be explicit: pass "
+                    "overwrite=True to enqueue anyway or overwrite=False "
+                    "to reject"
+                )
+            if overwrite is False:
+                raise FileExistsError(f"output target already exists: {existing[0]!r}")
+
+        # An empty batch is a no-op (and must not require preferences).
+        if not comps:
+            return []
+
+        if render_template is not None:
+            render_names = [
+                template.clean_template_name
+                for template in self._get_render_templates()
+            ]
+            if render_template not in render_names:
+                raise ValueError(
+                    f"Render settings template {render_template!r} not found. "
+                    f"Available: {render_names}"
+                )
+        if output_template is not None:
+            output_names = [template.name for template in self._get_output_templates()]
+            if output_template not in output_names:
+                raise ValueError(
+                    f"Output module template {output_template!r} not found. "
+                    f"Available: {output_names}"
+                )
+
+        # -- Apply phase. The prechecks above make every step here
+        # deterministic; the rollback still guarantees a later failure can
+        # never leave a half-applied batch. --
+        rq = self._render_queue
+        if rq is None:  # defensive: parse() always synthesizes a queue
+            raise RuntimeError("this project has no render queue")
+
+        new_items: list[RenderQueueItem] = []
+        try:
+            for comp, path_value in zip(comps, files):
+                rqi = rq.add(comp)
+                if render_template is not None:
+                    rqi.apply_template(render_template)
+                output_module = rqi.output_modules[0]
+                if output_template is not None:
+                    output_module.apply_template(output_template)
+                output_module.file = os.fspath(path_value)
+                new_items.append(rqi)
+        except BaseException:
+            for rqi in reversed(new_items):
+                rqi.remove()
+            raise
+        return new_items
 
     def import_placeholder(
         self,
